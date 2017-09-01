@@ -1,1 +1,120 @@
 test
+package myPack
+
+import scala.collection.mutable.ArrayBuffer
+import scala.io.Source
+import java.nio.charset.CodingErrorAction
+import scala.io.Codec
+import org.apache.spark.SparkContext._
+import org.apache.spark._
+import org.apache.spark.sql._
+import org.apache.spark.sql.SQLContext
+import org.apache.spark.sql.SQLImplicits
+
+object TopGearObject {
+
+/* Function to Map MId->List containing all its Genres */
+  def loadMovieNames(): Map[Int, List[String]] = {
+
+    implicit val codec = Codec("UTF-8")
+    codec.onMalformedInput(CodingErrorAction.REPLACE)
+    codec.onUnmappableCharacter(CodingErrorAction.REPLACE)
+
+    var movieGenres: Map[Int, List[String]] = Map()
+
+    val lines = Source.fromFile("../u.item").getLines()
+    for (line <- lines) {
+      var GenreIds = ArrayBuffer[String]()
+      var fields = line.split('|')
+
+      for (i <- 5 to 23)
+        if (fields(i).toInt == 1)
+          GenreIds.append(genreList(i - 5))
+      if (fields.length > 1) {
+        movieGenres += (fields(0).toInt -> GenreIds.toList)
+      }
+    }
+
+    return movieGenres
+  }
+
+  def genreList(x: Int): String = {
+
+    implicit val codec = Codec("UTF-8")
+    codec.onMalformedInput(CodingErrorAction.REPLACE)
+    codec.onUnmappableCharacter(CodingErrorAction.REPLACE)
+
+    var genreIds: Map[Int, String] = Map()
+
+    val lines = Source.fromFile("../u.genre").getLines()
+    for (line <- lines) {
+
+      var fields = line.split('|')
+      if (fields.length > 1) genreIds += (fields(1).toInt -> fields(0))
+
+    }
+    return genreIds(x)
+  }
+
+/* Custom Map function to cread rdd of userdata*/  
+  case class userData(UId: Double, MId: Int, Rating: Double)
+
+  def userMapper(line: String): userData = {
+
+    val fields = line.split('\t')
+    val userdata: userData = userData(fields(0).toDouble, fields(1).toInt, fields(2).toDouble)
+
+    return userdata
+  }
+/* Function to Map UserID->Occupation of user*/
+  def loadOccn(): Map[Int, String] = {
+
+    implicit val codec = Codec("UTF-8")
+    codec.onMalformedInput(CodingErrorAction.REPLACE)
+    codec.onUnmappableCharacter(CodingErrorAction.REPLACE)
+
+    var occnData: Map[Int, String] = Map()
+
+    val lines = Source.fromFile("F:/u.user").getLines()
+    for (line <- lines) {
+      val fields = line.split('|')
+      occnData += (fields(0).toInt -> fields(3))
+    }
+    return occnData
+  }
+/* Transformation function for flatmap   OUTPUT---Occupation,Genre,Rating*/
+  def f(x: (String, List[String], Double)) = {
+    var arr = new ArrayBuffer[(String, String, Double)]
+
+    for (y <- x._2) {
+      var a = (x._1, y, x._3)
+      arr.append(a)
+    }
+    arr.toList
+  }
+
+  def main(args: Array[String]) {
+
+    val spark = SparkSession
+      .builder
+      .appName("SparkSQL")
+      .master("local[*]")
+      .config("spark.sql.warehouse.dir", "file:///C:/temp")
+      .getOrCreate()
+
+    val names = loadMovieNames()
+    val users = spark.sparkContext.textFile("../u.data").map(userMapper)
+    val occn = loadOccn()
+
+    import spark.implicits._
+
+    val OccnGenreTable = users.map(x => (occn((x.UId).toInt), names(x.MId), x.Rating)).flatMap(x => f(x)).toDF("Occupation", "Genre", "Rating")    //rdd flattened and converted to DataFrame
+
+    OccnGenreTable.createTempView("MyTable")
+
+    var new1 = spark.sql("SELECT COUNT(Rating) AS raa,Occupation,Genre FROM myTable GROUP BY Occupation,Genre").createTempView("new1")                //count total no. of ratings acc to occupation-genre group 
+    var new2 = spark.sql("SELECT COUNT(Rating) AS ra3,Occupation,Genre FROM myTable WHERE Rating>3 GROUP BY Occupation,Genre").createTempView("new2")         //count total no. of ratings>3 acc to occupation-genre group
+    var new3 = spark.sql("SELECT raa, new1.Occupation,new1.genre,ra3 FROM new1 JOIN new2 ON ((new1.Occupation=new2.Occupation) AND (new1.Genre=new2.Genre))").createTempView("new3")      //joining above two tables
+    var new4 = spark.sql("SELECT Occupation,Genre,(ra3/raa)AS WA_rating FROM new3 ORDER BY Occupation ASC , WA_rating DESC ").show()              //To Final Table containing wa rating
+    }
+}
